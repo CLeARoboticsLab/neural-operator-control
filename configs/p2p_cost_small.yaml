@@ -1,0 +1,102 @@
+# ==============================================================================
+# P2P-Cost-Small Environment Configuration
+# ==============================================================================
+# Smaller variant of P2P-Cost for faster iteration / debugging.
+# Same dynamics as p2p_cost, fewer goals.
+# Source: create_double_integrator_lqr.py
+
+generator: p2p_cost
+
+# ---------- Data Generation ----------
+data:
+  num_goals: 50                    # Reduced from 500
+  trajectories_per_goal: 10        # Matches paper Table 1
+  seed: 42
+
+  horizon: 50
+  dt: 0.1
+
+  workspace:
+    goal_range: [-10.0, 10.0]
+    state_range: [-10.0, 10.0]
+    vel_range: [-5.0, 5.0]
+
+  goal_state:
+    zero_velocity: true
+
+  cost_weights:
+    Q_weight: 1.0
+    R_weight: 0.1
+    Qf_weight: 10.0
+
+# ---------- Model ----------
+model:
+  p: 128
+  phi_hidden_size: 128
+  phi_output_size: 128
+  rho_hidden_size: 128
+  trunk_hidden_size: 128
+  n_phi_layers: 2
+  n_rho_layers: 2
+  n_trunk_layers: 2
+  aggregation_type: "attention"
+  attention_n_heads: 4
+  attention_n_tokens: 4
+  use_bias: true
+
+# ---------- Training ----------
+# Paper protocol (train_setonet_lqr_small.yaml): stored small dataset
+# (50 goals x 10 traj), on-policy context K=128, N=10 expert trajectories.
+training:
+  num_iterations: 7500             # paper: 7500 (the reduced *data* is the small dataset)
+  learning_rate: 1.0e-3
+  M: 32
+  K: [128]                         # Branch context size (on-policy transitions)
+  N: 10                            # Expert trajectories in the imitation loss (reduced data)
+  eval_every: 100
+  num_eval_tasks: 10               # paper small: 10 transfer tasks at eval
+  num_runs: 10                     # paper best-of-10 (run 1 to validate)
+  train_perc: 0.8
+  goal_range: [-10.0, 10.0]
+  state_range: [-10.0, 10.0]
+  src_vel_range: [-10.0, 10.0]
+  src_control_range: [-5.0, 5.0]
+
+# ---------- SetONet Meta-Training ----------
+# Used by: make train-meta ENV=p2p_cost_small VARIANT=meta_branch|meta_full
+setonet_meta:
+  inner_lr: 0.01
+  outer_lr: 0.001
+  K_support: 64                    # Source samples for support (branch context)
+  K_query: 64                      # Source samples for query
+  N_support: 4                     # Target trajectories for support (inner loop)
+  N_query: 4                       # Target trajectories for query (outer loop)
+  num_tasks: 8                     # Reduced for small variant
+  num_iterations: 500
+  eval_every: 50
+  num_eval_batches: 5
+
+# ---------- MAML Baseline ----------
+maml:
+  inner_lr: 0.01                   # Alpha: inner loop learning rate
+  outer_lr: 0.001                  # Beta: outer loop learning rate
+  K_support: 64                    # Source (state+time, control) pairs for adaptation
+  K_query: 8                       # Expert trajectories for evaluation
+  num_tasks: 16                    # Tasks per meta-batch
+  num_iterations: 500              # Reduced for small variant
+  eval_every: 50
+  num_eval_batches: 10
+
+maml_model:
+  hidden_size: 128
+  num_layers: 16
+
+# ---------- Evaluation ----------
+# evaluation:
+#   ...
+
+# ---------- Task-Conditioned MLP Baseline ----------
+# Shallow + wide (trainable) MLP, parameter-comparable to the SetONet operator.
+baseline_model:
+  hidden_size: 288
+  num_layers: 4

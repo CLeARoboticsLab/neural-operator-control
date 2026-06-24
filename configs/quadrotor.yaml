@@ -1,0 +1,117 @@
+# ==============================================================================
+# Quadrotor Environment Configuration
+# ==============================================================================
+# Planar (2D) quadrotor with varying mass, inertia, and arm length.
+# Tasks vary by dynamics parameters and hover-position goals.
+# State: [y, z, phi, y_dot, z_dot, phi_dot] (6D)
+# Control: [f, tau] (2D) — thrust and torque
+# Source: create_planar_quadrotor_data.py
+
+generator: quadrotor
+
+# ---------- Data Generation ----------
+data:
+  num_dynamics_configs: 100        # Number of quadrotor configurations
+  num_trajectories_per_task: 20    # Trajectories per (dynamics, goal) pair
+  seed: 42
+
+  horizon: 100                    # Trajectory length (2s at 50 Hz)
+  dt: 0.02                        # Time step (50 Hz)
+  max_iterations: 150             # Maximum iLQR iterations
+
+  workspace:
+    y_range: [-2.0, 2.0]          # Horizontal position bounds (m)
+    z_range: [0.5, 3.0]           # Altitude bounds (m)
+
+  # Dynamics parameter ranges
+  dynamics_ranges:
+    mass_range: [0.1, 0.5]        # kg (small indoor quadrotors)
+    inertia_scale_range: [0.8, 1.2]  # Scale factor relative to mass
+    arm_length_range: [0.05, 0.15]   # Arm length (m)
+    max_torque: 0.1               # Maximum torque (N*m)
+
+  start_state:
+    phi_range: [-0.3, 0.3]        # Initial roll angle (rad), ~[-17, 17] deg
+    velocity_range: [-0.5, 0.5]   # Initial velocity (m/s)
+    phi_dot_range: [-0.5, 0.5]    # Initial angular velocity (rad/s)
+
+  goal_state:
+    type: "fixed"                 # "fixed" or "random"
+    fixed_position: [0.0, 1.5, 0.0, 0.0, 0.0, 0.0]  # Hover at y=0, z=1.5m
+    num_goals: 1                  # Only used when type="random"
+
+  # iLQR cost weights
+  cost_weights:
+    position_weight: 10.0
+    velocity_weight: 1.0
+    angle_weight: 50.0            # Keep level
+    angular_velocity_weight: 5.0
+    control_weight: 0.1
+    terminal_position_weight: 100.0
+    terminal_velocity_weight: 50.0
+    terminal_angle_weight: 100.0
+
+# ---------- Model ----------
+# Paper config (models/dynamics_quad/config.yaml): bare SetONet, p=64, 3 layers,
+# action z-scored at the data level (QuadrotorDataLoader), no NormalizedSetONet.
+model:
+  p: 64
+  phi_hidden_size: 128
+  phi_output_size: 128
+  rho_hidden_size: 128
+  trunk_hidden_size: 128
+  n_phi_layers: 3
+  n_rho_layers: 3
+  n_trunk_layers: 3
+  aggregation_type: "attention"
+  attention_n_heads: 4
+  attention_n_tokens: 4
+  use_bias: true
+
+# ---------- Training ----------
+training:
+  num_iterations: 2000             # paper: 2000
+  learning_rate: 1.0e-3
+  M: 16                            # Tasks per batch (dynamics configs)
+  K: 64                            # Branch context: (state, action, next_state) transitions
+  N: 5                             # Expert trajectories for loss (fixed)
+  eval_every: 100
+  num_runs: 10                     # paper best-of-10 (run 1 to validate)
+
+# ---------- SetONet Meta-Training ----------
+setonet_meta:
+  inner_lr: 0.01
+  outer_lr: 0.001
+  K: 64                            # Context transitions per task
+  N: 5                             # Expert trajectories per task
+  num_tasks: 16
+  num_iterations: 1000
+  eval_every: 100
+  num_eval_batches: 10
+  goal_idx: 0
+
+# ---------- MAML Baseline ----------
+maml:
+  inner_lr: 0.01
+  outer_lr: 0.001
+  K_support: 64                    # (state+time, action) samples for adaptation
+  K_query: 32                      # (state+time, action) samples for evaluation
+  num_tasks: 16
+  num_iterations: 1000
+  eval_every: 100
+  num_eval_batches: 10
+  goal_idx: 0
+
+maml_model:
+  hidden_size: 128
+  num_layers: 17
+
+# ---------- Evaluation ----------
+# evaluation:
+#   ...
+
+# ---------- Task-Conditioned MLP Baseline ----------
+# Shallow + wide (trainable) MLP, parameter-comparable to the SetONet operator.
+baseline_model:
+  hidden_size: 320
+  num_layers: 4

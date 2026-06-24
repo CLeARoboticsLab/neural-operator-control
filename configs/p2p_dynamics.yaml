@@ -1,0 +1,120 @@
+# ==============================================================================
+# P2P-Dynamics Environment Configuration
+# ==============================================================================
+# Double integrator with varying dynamics (friction, max velocity/acceleration).
+# Tasks vary by both goal state and dynamics parameters.
+# State: [x, y, vx, vy] (4D), Control: [ax, ay] (2D)
+# Source: create_varying_dynamics_data.py
+
+generator: p2p_dynamics
+
+# ---------- Data Generation ----------
+data:
+  num_dynamics_configs: 100        # Number of different dynamics configurations
+  num_trajectories_per_task: 100   # Trajectories per (dynamics, goal) pair
+  seed: 42
+
+  horizon: 30                     # Trajectory length in timesteps
+  dt: 0.1                         # Time step (seconds)
+  max_iterations: 100             # Maximum iLQR iterations
+
+  workspace:
+    x_range: [-5.0, 5.0]          # X position bounds (m)
+    y_range: [-5.0, 5.0]          # Y position bounds (m)
+
+  # Dynamics parameter ranges (sampled per configuration)
+  dynamics_ranges:
+    friction_range: [0.3, 0.9]
+    max_velocity_range: [10.0, 15.0]    # m/s
+    max_acceleration_range: [3.0, 5.0]  # m/s^2
+
+  start_state:
+    speed_range: [0.0, 0.0]       # Start from rest
+
+  goal_state:
+    type: "random"                # "random" or "grid"
+    speed_range: [0.0, 0.0]
+    zero_velocity: true
+    # Random goal parameters
+    num_goals: 1
+    # Grid goal parameters (used when type: "grid")
+    grid_num_x: 5
+    grid_num_y: 5
+
+  # iLQR cost weights
+  cost_weights:
+    position_weight: 1.0
+    velocity_weight: 0.5
+    control_weight: 0.01
+    terminal_position_weight: 20.0
+    terminal_velocity_weight: 10.0
+
+# ---------- Model ----------
+# Paper config: SetONet-1 = bare SetONet with DEFAULTS (p=32, 4 layers, 1 attn token),
+# wrapped in NormalizedSetONet (min-max state/action scaling). This is the smallest
+# operator in the paper.
+model:
+  p: 32
+  phi_hidden_size: 128
+  phi_output_size: 128
+  rho_hidden_size: 128
+  trunk_hidden_size: 128
+  n_phi_layers: 4
+  n_rho_layers: 4
+  n_trunk_layers: 4
+  aggregation_type: "attention"
+  attention_n_heads: 4
+  attention_n_tokens: 1
+  use_bias: true
+  use_normalization: true          # wrap in NormalizedSetONet (GridEnvironmentNormalizer)
+
+# ---------- Training ----------
+training:
+  num_iterations: 15000            # paper: episodes 15000
+  learning_rate: 5.0e-4            # paper: 0.0005
+  M: 32                            # Tasks per training batch
+  K: [16, 32, 64, 128]             # Branch context: (state, action, next_state) transitions
+  N: 16                            # Expert trajectories for loss (fixed)
+  eval_every: 100
+  num_runs: 10                     # paper best-of-10 (run 1 to validate, set 10 for faithful config)
+  cosine_decay_alpha: 0.01         # cosine LR decay to 1% over episodes
+  grad_clip_norm: 1.0              # global-norm gradient clipping
+
+# ---------- SetONet Meta-Training ----------
+setonet_meta:
+  inner_lr: 0.01
+  outer_lr: 0.001
+  K: 32                            # Branch context: (state, action, next_state) transitions
+  N_support: 8                     # Expert trajectories for inner loop
+  N_query: 8                       # Expert trajectories for outer loop
+  num_tasks: 16
+  num_iterations: 1500
+  eval_every: 100
+  num_eval_batches: 10
+  goal_idx: 0
+
+# ---------- MAML Baseline ----------
+maml:
+  inner_lr: 0.01
+  outer_lr: 0.001
+  N_support: 8                     # Expert trajectories for adaptation (inner loop)
+  N_query: 8                       # Expert trajectories for evaluation (outer loop)
+  num_tasks: 16
+  num_iterations: 1500
+  eval_every: 100
+  num_eval_batches: 10
+  goal_idx: 0                      # Fixed goal for dynamics-based training
+
+maml_model:
+  hidden_size: 128
+  num_layers: 17
+
+# ---------- Evaluation ----------
+# evaluation:
+#   ...
+
+# ---------- Task-Conditioned MLP Baseline ----------
+# Shallow + wide (trainable) MLP, parameter-comparable to the SetONet operator.
+baseline_model:
+  hidden_size: 320
+  num_layers: 4

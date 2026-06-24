@@ -1,0 +1,72 @@
+[project]
+name = "setonet"
+version = "0.1.0"
+description = "Multi-Task Operator Learning for Control"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+
+dependencies = [
+    # Core ML framework
+    "jax==0.4.30",
+    "jaxlib==0.4.30",
+    "equinox==0.11.4",
+    "optax==0.2.2",
+    "jaxtyping==0.2.28",
+
+    # Optimal control solvers
+    "casadi==3.6.5",                  # IPOPT (obstacle avoidance)
+    "trajax @ git+https://github.com/google/trajax",  # tvLQR (P2P-Cost)
+
+    # Data and plotting
+    "numpy==1.26.4",
+    "matplotlib==3.9.0",
+    "scipy==1.13.1",
+    "pyyaml==6.0.1",
+
+    # Utilities
+    "tqdm==4.66.4",
+    "python-dotenv==1.0.1",          # src/__init__.py load_dotenv()
+]
+
+[project.optional-dependencies]
+# GPU support — install with: pip install ".[cuda]"
+cuda = [
+    "jax[cuda12]==0.4.30",
+]
+
+# iMuJoCo environments — install with: pip install ".[imujoco]"
+imujoco = [
+    "mujoco==3.1.6",
+    "gymnasium[mujoco]==0.29.1",
+    "stable-baselines3==2.3.2",
+]
+
+# Logging and visualization (not required for reproduction)
+dev = [
+    "tensorboard==2.16.1",
+    "ipython",
+    "black",
+    "ruff",
+]
+
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
+
+# ---------- Tool configuration ----------
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+
+[tool.black]
+line-length = 100
+target-version = ["py310"]

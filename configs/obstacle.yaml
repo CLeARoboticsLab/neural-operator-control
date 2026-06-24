@@ -1,0 +1,86 @@
+# ==============================================================================
+# Obstacle Environment Configuration
+# ==============================================================================
+# Double integrator navigating through randomly placed obstacles.
+# Tasks vary by obstacle configuration (count, positions, radii).
+# Hard constraints via CasADi IPOPT nonlinear optimization.
+# State: [px, py, vx, vy] (4D), Control: [ux, uy] (2D)
+# Source: create_exp_traj_casadi_hard.py
+
+generator: obstacle
+
+# ---------- Data Generation ----------
+data:
+  num_tasks: 500                   # Number of task instances
+  num_traj: 30                     # Trajectories per task (2x this many start points)
+  T: 1.0                          # Total time horizon (seconds)
+  N: 50                           # Number of time steps (dt = T/N)
+  num_obs: 12                     # Max obstacle slots (padded with dummies)
+  qf: 1000.0                     # Terminal state cost weight
+  qp: 1000.0                     # Obstacle cost weight
+  num_workers: 4                  # Parallel IPOPT solver workers
+
+# ---------- Model ----------
+model:
+  p: 128
+  phi_hidden_size: 128
+  phi_output_size: 128
+  rho_hidden_size: 128
+  trunk_hidden_size: 128
+  n_phi_layers: 4
+  n_rho_layers: 4
+  n_trunk_layers: 4
+  aggregation_type: "attention"
+  attention_n_heads: 4
+  attention_n_tokens: 4
+  use_bias: true
+
+# ---------- Training ----------
+training:
+  num_iterations: 20000
+  learning_rate: 1.0e-3
+  M: 16                            # Tasks per batch (obstacle configs)
+  K: [32, 64, 128]                 # Expert trajectories for loss (randomly sampled per iter)
+                                   # Branch context is always num_obs obstacles, not K
+  eval_every: 100
+  num_runs: 10                     # paper best-of-10 (run 1 to validate)
+  normalize: true
+  train_perc: 0.9                  # paper: 0.9 (-> 450 train / 50 test tasks)
+  split_seed: 132                  # paper seed
+
+# ---------- SetONet Meta-Training ----------
+setonet_meta:
+  inner_lr: 0.01
+  outer_lr: 0.001
+  K: 10                            # Trajectories per task
+  num_tasks: 16
+  num_iterations: 2000
+  eval_every: 100
+  num_eval_batches: 10
+  split_seed: 42
+
+# ---------- MAML Baseline ----------
+maml:
+  inner_lr: 0.01
+  outer_lr: 0.001
+  K_support: 8                     # Trajectories for adaptation
+  K_query: 8                       # Trajectories for evaluation
+  num_tasks: 16
+  num_iterations: 2000
+  eval_every: 100
+  num_eval_batches: 10
+  split_seed: 42
+
+maml_model:
+  hidden_size: 128
+  num_layers: 22
+
+# ---------- Evaluation ----------
+# evaluation:
+#   ...
+
+# ---------- Task-Conditioned MLP Baseline ----------
+# Shallow + wide (trainable) MLP, parameter-comparable to the SetONet operator.
+baseline_model:
+  hidden_size: 340
+  num_layers: 4
