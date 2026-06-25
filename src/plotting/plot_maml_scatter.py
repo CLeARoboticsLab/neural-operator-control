@@ -39,6 +39,18 @@ def _inner(m):
     return m.model if isinstance(m, NormalizedSetONet) else m
 
 
+# Trunk-time convention differs by env: VaryingDynamicsData (P2P-Dynamics) trains
+# with RAW integer timesteps (0,1,...,H-1); DoubleIntegratorLQRData (P2P-Cost) and
+# QuadrotorDataLoader use NORMALIZED time t/H. Querying with the wrong convention
+# leaves t=0 correct but corrupts every later step (silent closed-loop drift).
+def _qtime(t, H, raw_time):
+    return float(t) if raw_time else t / H
+
+
+def _times_arr(H, raw_time, lib=np):
+    return lib.arange(H, dtype=float) if raw_time else lib.linspace(0, 1, H, endpoint=False)
+
+
 def setonet_freeze_filter(ft, freeze_mode):
     """eqx filter selecting trainable leaves for a (possibly Normalized) SetONet.
 
@@ -216,10 +228,17 @@ class TransferTaskDataLoader:
 
 # ── Per-task evaluation functions ───────────────────────────────────────────
 
-def _get_random_context(dl, tid, dataset):
-    """Get random context for P2P-Cost (matching training distribution)."""
-    goal_state = dataset['goal_states'][tid]
-    src_s, src_c, src_co = dl.sample_random_context(tid, K, goal_state)
+def _get_context(dl, tid, dataset):
+    """On-policy branch context for P2P-Cost: K (state, control) -> immediate-cost
+    transitions sampled from the task's stored optimal trajectories.
+
+    This matches how the aligned operator is trained (DoubleIntegratorLQRData, which
+    draws on-policy transitions). The operator only ever sees on-policy context, so
+    feeding uniform-random context (the old online-training convention) is a
+    distribution shift that yields poor branch encodings and closed-loop drift.
+    Context is drawn from the task's TRAIN split, leaving the holdout split for eval.
+    """
+    src_s, src_c, src_co, _, _, _ = dl._sample(dl.task_data[tid]['train_indices'], K, N=1)
     si = jnp.array(np.concatenate([src_s, src_c], axis=-1))
     sv = jnp.array(src_co)
     return si, sv
@@ -230,7 +249,7 @@ def eval_pretrained_per_task(model, dl, task_ids, max_action, dataset):
     for tid in task_ids:
         errors = []
         for _ in range(NUM_EVAL_BATCHES):
-            si, sv = _get_random_context(dl, tid, dataset)
+            si, sv = _get_context(dl, tid, dataset)
             eb = dl.sample_holdout(tid, K, N=N_EVAL)
             pred = predict_setonet(model, si, sv, eb[4])
             errors.append(relative_l2(pred * max_action, eb[5] * max_action))
@@ -262,7 +281,7 @@ def _eval_partial_ft_per_task(model, dl, task_ids, num_demos, grad_steps,
         opt_state = opt.init(trainable)
 
         for _ in range(grad_steps):
-            si, sv = _get_random_context(dl, tid, dataset)
+            si, sv = _get_context(dl, tid, dataset)
             b = dl.sample_train(tid, K, N=num_demos)
             ts, tc = jnp.array(b[4]), jnp.array(b[5])
             def loss_fn(tr):
@@ -277,7 +296,7 @@ def _eval_partial_ft_per_task(model, dl, task_ids, num_demos, grad_steps,
         final = eqx.combine(trainable, frozen)
         errors = []
         for _ in range(NUM_EVAL_BATCHES):
-            si, sv = _get_random_context(dl, tid, dataset)
+            si, sv = _get_context(dl, tid, dataset)
             eb = dl.sample_holdout(tid, K, N=N_EVAL)
             pred = predict_setonet(final, si, sv, eb[4])
             errors.append(relative_l2(pred * max_action, eb[5] * max_action))
@@ -298,7 +317,7 @@ def eval_setonet_ft_per_task(model, dl, task_ids, num_demos, grad_steps, max_act
         opt_state = opt.init(trainable)
 
         for _ in range(grad_steps):
-            si, sv = _get_random_context(dl, tid, dataset)
+            si, sv = _get_context(dl, tid, dataset)
             b = dl.sample_train(tid, K, N=num_demos)
             ts, tc = jnp.array(b[4]), jnp.array(b[5])
             def loss_fn(tr):
@@ -313,7 +332,7 @@ def eval_setonet_ft_per_task(model, dl, task_ids, num_demos, grad_steps, max_act
         ft = eqx.combine(trainable, frozen)
         errors = []
         for _ in range(NUM_EVAL_BATCHES):
-            si, sv = _get_random_context(dl, tid, dataset)
+            si, sv = _get_context(dl, tid, dataset)
             eb = dl.sample_holdout(tid, K, N=N_EVAL)
             pred = predict_setonet(ft, si, sv, eb[4])
             errors.append(relative_l2(pred * max_action, eb[5] * max_action))
@@ -458,7 +477,7 @@ def _collect_transitions(states_arr, actions_arr, traj_indices):
 
 
 def _dynamics_eval_pretrained_per_task(model, dataset, task_configs, traj_index_fn,
-                                       K, action_denorm_fn=None):
+                                       K, action_denorm_fn=None, raw_time=False):
     """Evaluate pretrained dynamics model per task (dynamics config)."""
     task_errors = []
     for config_idx in task_configs:
@@ -482,7 +501,7 @@ def _dynamics_eval_pretrained_per_task(model, dataset, task_configs, traj_index_
             # Build target with time
             pred_list = []
             for t in range(H):
-                tgt = jnp.concatenate([jnp.array(expert_s[t]), jnp.array([t / H])])
+                tgt = jnp.concatenate([jnp.array(expert_s[t]), jnp.array([_qtime(t, H, raw_time)])])
                 pred_list.append(model(src_inputs, src_outputs, tgt))
             pred = np.array(jnp.stack(pred_list))
             if action_denorm_fn:
@@ -494,7 +513,8 @@ def _dynamics_eval_pretrained_per_task(model, dataset, task_configs, traj_index_
 
 def _dynamics_eval_ft_per_task(model, dataset, task_configs, traj_index_fn,
                                 K, grad_steps, num_demos, action_denorm_fn=None,
-                                freeze_mode='trunk', action_mean=None, action_std=None):
+                                freeze_mode='trunk', action_mean=None, action_std=None,
+                                raw_time=False):
     """Fine-tune dynamics model per task."""
     task_errors = []
     for config_idx in task_configs:
@@ -527,7 +547,7 @@ def _dynamics_eval_ft_per_task(model, dataset, task_configs, traj_index_fn,
             else:
                 demo_a_norm = demo_a_raw
             H = demo_a_norm.shape[1]
-            time_norm = jnp.linspace(0, 1, H, endpoint=False)
+            time_norm = _times_arr(H, raw_time, jnp)
             time_bc = jnp.broadcast_to(time_norm[None, :, None], (demo_s.shape[0], H, 1))
             demo_st = jnp.concatenate([demo_s, time_bc], axis=-1)
 
@@ -559,7 +579,7 @@ def _dynamics_eval_ft_per_task(model, dataset, task_configs, traj_index_fn,
             H = len(expert_a)
             pred_list = []
             for t in range(H):
-                tgt = jnp.concatenate([jnp.array(expert_s[t]), jnp.array([t / H])])
+                tgt = jnp.concatenate([jnp.array(expert_s[t]), jnp.array([_qtime(t, H, raw_time)])])
                 pred_list.append(final(src_inputs, src_outputs, tgt))
             pred = np.array(jnp.stack(pred_list))
             if action_denorm_fn:
@@ -570,7 +590,8 @@ def _dynamics_eval_ft_per_task(model, dataset, task_configs, traj_index_fn,
 
 
 def _dynamics_eval_maml_per_task(maml_model, dataset, task_configs, traj_index_fn,
-                                  num_demos, grad_steps, inner_lr, action_denorm_fn=None):
+                                  num_demos, grad_steps, inner_lr, action_denorm_fn=None,
+                                  raw_time=False):
     """Evaluate MAML per task for dynamics environments."""
     task_errors = []
     for config_idx in task_configs:
@@ -583,7 +604,7 @@ def _dynamics_eval_maml_per_task(maml_model, dataset, task_configs, traj_index_f
         demo_s = dataset['states'][demo_idx, :-1, :]
         demo_a = dataset['actions'][demo_idx]
         H = demo_a.shape[1]
-        time_norm = np.linspace(0, 1, H, endpoint=False)[:, None]
+        time_norm = _times_arr(H, raw_time)[:, None]
         time_bc = np.repeat(time_norm[None, :, :], demo_s.shape[0], axis=0)
         demo_st = np.concatenate([demo_s, time_bc], axis=-1)
         sup_s = jnp.array(demo_st.reshape(-1, demo_st.shape[-1]))
@@ -604,7 +625,7 @@ def _dynamics_eval_maml_per_task(maml_model, dataset, task_configs, traj_index_f
             expert_s = dataset['states'][ei, :-1, :]
             expert_a = dataset['actions'][ei]
             H = len(expert_a)
-            time_norm_e = np.linspace(0, 1, H, endpoint=False)[:, None]
+            time_norm_e = _times_arr(H, raw_time)[:, None]
             tgt_s = jnp.array(np.concatenate([expert_s, time_norm_e], axis=-1))
             pred = np.array(jax.vmap(adapted)(tgt_s))
             if action_denorm_fn:
@@ -668,27 +689,27 @@ def run_p2p_dynamics(config_dir, data_dir, checkpoint_dir, seed):
 
     print("  Pre-trained...")
     pretrained_errors = _dynamics_eval_pretrained_per_task(
-        pretrained, dataset, test_configs, traj_fn, K)
+        pretrained, dataset, test_configs, traj_fn, K, raw_time=True)
     print(f"    Mean: {np.mean(pretrained_errors):.4f}")
 
     print(f"  SetONet-FT ({GRAD_STEPS} steps)...")
     ft_errors = _dynamics_eval_ft_per_task(
-        pretrained, dataset, test_configs, traj_fn, K, GRAD_STEPS, NUM_DEMOS, freeze_mode='trunk')
+        pretrained, dataset, test_configs, traj_fn, K, GRAD_STEPS, NUM_DEMOS, freeze_mode='trunk', raw_time=True)
     print(f"    Mean: {np.mean(ft_errors):.4f}")
 
     print(f"  Last-Branch ({GRAD_STEPS} steps)...")
     lb_errors = _dynamics_eval_ft_per_task(
-        pretrained, dataset, test_configs, traj_fn, K, GRAD_STEPS, NUM_DEMOS, freeze_mode='last_branch')
+        pretrained, dataset, test_configs, traj_fn, K, GRAD_STEPS, NUM_DEMOS, freeze_mode='last_branch', raw_time=True)
     print(f"    Mean: {np.mean(lb_errors):.4f}")
 
     print(f"  Last-Both ({GRAD_STEPS} steps)...")
     lboth_errors = _dynamics_eval_ft_per_task(
-        pretrained, dataset, test_configs, traj_fn, K, GRAD_STEPS, NUM_DEMOS, freeze_mode='last_both')
+        pretrained, dataset, test_configs, traj_fn, K, GRAD_STEPS, NUM_DEMOS, freeze_mode='last_both', raw_time=True)
     print(f"    Mean: {np.mean(lboth_errors):.4f}")
 
     print(f"  MAML ({MAML_GRAD_STEPS} steps)...")
     maml_errors = _dynamics_eval_maml_per_task(
-        maml_model, dataset, test_configs, traj_fn, NUM_DEMOS, MAML_GRAD_STEPS, inner_lr)
+        maml_model, dataset, test_configs, traj_fn, NUM_DEMOS, MAML_GRAD_STEPS, inner_lr, raw_time=True)
     print(f"    Mean: {np.mean(maml_errors):.4f}")
 
     return {

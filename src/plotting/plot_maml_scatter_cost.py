@@ -42,8 +42,9 @@ from src.training.maml import MAMLMLP
 from src.envs.create_p2p_cost import generate_dataset
 # Reuse Figure-6 helpers (prediction, dataloader, random-context sampling).
 from src.plotting.plot_maml_scatter import (
-    predict_setonet, predict_maml, TransferTaskDataLoader, _get_random_context,
+    predict_setonet, predict_maml, TransferTaskDataLoader, _get_context,
     setonet_freeze_filter, build_dynamics_normalized, _collect_transitions,
+    _qtime, _times_arr,
     GRAD_STEPS, MAML_GRAD_STEPS, NUM_DEMOS, NUM_TASKS, K, FT_LR, DEFAULT_SEED,
 )
 from src.envs.dynamics_models import (
@@ -82,7 +83,7 @@ def _adapt_setonet(model, dl, tid, dataset, mode, grad_steps, num_demos):
     opt = optax.adam(FT_LR)
     opt_state = opt.init(trainable)
     for _ in range(grad_steps):
-        si, sv = _get_random_context(dl, tid, dataset)
+        si, sv = _get_context(dl, tid, dataset)
         b = dl.sample_train(tid, K, N=num_demos)
         ts, tc = jnp.array(b[4]), jnp.array(b[5])
 
@@ -115,13 +116,14 @@ def _adapt_maml(maml_model, dl, tid, inner_lr, grad_steps, num_demos):
 def rollout_cost(predict_phys, start_state, step_fn, stage_cost, terminal_cost, horizon):
     """Closed-loop rollout; returns achieved cost (sum stage + terminal).
 
-    predict_phys(state_phys, t_norm) -> PHYSICAL control (closure handles normalization).
+    predict_phys(state_phys, t_step) -> PHYSICAL control. t_step is the RAW integer
+    step index; the closure applies the env's trunk-time convention (t/H or raw t).
     step_fn(state_phys, ctrl_phys) -> next_state_phys.
     """
     state = np.asarray(start_state, dtype=np.float64)
     total = 0.0
     for t in range(horizon):
-        u = np.asarray(predict_phys(state, t / horizon), dtype=np.float64)
+        u = np.asarray(predict_phys(state, t), dtype=np.float64)
         total += float(stage_cost(state, u))
         state = np.asarray(step_fn(state, u), dtype=np.float64)
     total += float(terminal_cost(state))
@@ -218,20 +220,20 @@ def _eval_tasks(env, dl, task_ids, dataset, pretrained, maml_model, inner_lr,
 
         # branch context for SetONet methods (fixed per task)
         if is_setonet_ctx:
-            si, sv = _get_random_context(dl, tid, dataset)
+            si, sv = _get_context(dl, tid, dataset)
 
         for method in METHODS:
             if method == "maml":
                 if maml_model is None:
                     out[method].append(np.nan); continue
                 am = _adapt_maml(maml_model, dl, tid, inner_lr, GRAD_STEPS, NUM_DEMOS)
-                predict = lambda st, tn, _am=am: np.asarray(_am(jnp.array([*((st - sm) / ss), tn]))) * max_action
+                predict = lambda st, t, _am=am, _h=horizon: np.asarray(_am(jnp.array([*((st - sm) / ss), t / _h]))) * max_action
             else:
                 mode = {"pretrained": "none", "setonet_ft": "ft",
                         "last_branch": "last_branch", "last_both": "last_both"}[method]
                 am = _adapt_setonet(pretrained, dl, tid, dataset, mode, GRAD_STEPS, NUM_DEMOS)
-                predict = lambda st, tn, _am=am: np.asarray(
-                    _am(si, sv, jnp.array([*((st - sm) / ss), tn]))) * max_action
+                predict = lambda st, t, _am=am, _h=horizon: np.asarray(
+                    _am(si, sv, jnp.array([*((st - sm) / ss), t / _h]))) * max_action
             ratios = []
             for n in range(starts.shape[0]):
                 pc = rollout_cost(predict, starts[n], step_fn, stage, terminal, horizon)
@@ -251,7 +253,7 @@ def _sample_dyn_context(dataset, traj_indices, k):
 
 
 def _adapt_dynamics(model, dataset, traj_indices, freeze_mode, grad_steps, num_demos,
-                    action_mean=None, action_std=None):
+                    action_mean=None, action_std=None, raw_time=False):
     if freeze_mode == "none" or grad_steps == 0:
         return model
     ft = copy.deepcopy(model)
@@ -269,7 +271,7 @@ def _adapt_dynamics(model, dataset, traj_indices, freeze_mode, grad_steps, num_d
         if action_mean is not None:
             demo_a = (demo_a - jnp.array(action_mean)) / jnp.array(action_std)
         h = demo_a.shape[1]
-        tb = jnp.broadcast_to(jnp.linspace(0, 1, h, endpoint=False)[None, :, None], (demo_s.shape[0], h, 1))
+        tb = jnp.broadcast_to(_times_arr(h, raw_time, jnp)[None, :, None], (demo_s.shape[0], h, 1))
         demo_st = jnp.concatenate([demo_s, tb], axis=-1)
 
         def loss_fn(tr):
@@ -284,14 +286,14 @@ def _adapt_dynamics(model, dataset, traj_indices, freeze_mode, grad_steps, num_d
 
 
 def _adapt_maml_dyn(maml, dataset, traj_indices, inner_lr, grad_steps, num_demos,
-                    action_mean=None, action_std=None):
+                    action_mean=None, action_std=None, raw_time=False):
     di = np.random.choice(traj_indices, size=min(num_demos, len(traj_indices)), replace=False)
     demo_s = dataset["states"][di, :-1, :]
     demo_a = dataset["actions"][di]
     if action_mean is not None:
         demo_a = (demo_a - action_mean) / action_std
     h = demo_a.shape[1]
-    tb = np.broadcast_to(np.linspace(0, 1, h, endpoint=False)[None, :, None], (demo_s.shape[0], h, 1))
+    tb = np.broadcast_to(_times_arr(h, raw_time)[None, :, None], (demo_s.shape[0], h, 1))
     st = jnp.array(np.concatenate([demo_s, tb], axis=-1).reshape(-1, demo_s.shape[-1] + 1))
     ac = jnp.array(demo_a.reshape(-1, demo_a.shape[-1]))
     adapted = maml
@@ -386,23 +388,27 @@ def run_dynamics_like(env, config_dir, data_dir, checkpoint_dir, seed, is_quad):
             expert_costs.append(sum(float(stage(es[t], ea[t])) for t in range(len(ea))) + float(terminal(es[-1])))
         expert_costs = np.array(expert_costs)
 
+        # P2P-Dynamics (VaryingDynamicsData) trains the trunk on RAW integer time;
+        # Quadrotor (QuadrotorDataLoader) uses normalized t/H.
+        rt = not is_quad
         for method in METHODS:
             if method == "maml":
                 if maml is None:
                     out[method].append(np.nan); continue
-                am = _adapt_maml_dyn(maml, dataset, ti, inner_lr, MAML_GRAD_STEPS, NUM_DEMOS, action_mean, action_std)
+                am = _adapt_maml_dyn(maml, dataset, ti, inner_lr, MAML_GRAD_STEPS, NUM_DEMOS,
+                                     action_mean, action_std, raw_time=rt)
                 if is_quad:
-                    predict = lambda s, tn, _a=am: np.asarray(_a(jnp.array([*s, tn]))) * action_std + action_mean
+                    predict = lambda s, t, _a=am, _h=horizon: np.asarray(_a(jnp.array([*s, _qtime(t, _h, False)]))) * action_std + action_mean
                 else:
-                    predict = lambda s, tn, _a=am: np.asarray(_a(jnp.array([*s, tn])))
+                    predict = lambda s, t, _a=am, _h=horizon: np.asarray(_a(jnp.array([*s, _qtime(t, _h, True)])))
             else:
                 am = _adapt_dynamics(model, dataset, ti, FREEZE_MODE.get(method, "none"),
-                                     GRAD_STEPS, NUM_DEMOS, action_mean, action_std)
+                                     GRAD_STEPS, NUM_DEMOS, action_mean, action_std, raw_time=rt)
                 si, sv = _sample_dyn_context(dataset, ti, K)
                 if is_quad:
-                    predict = lambda s, tn, _a=am, _si=si, _sv=sv: np.asarray(_a(_si, _sv, jnp.array([*s, tn]))) * action_std + action_mean
+                    predict = lambda s, t, _a=am, _si=si, _sv=sv, _h=horizon: np.asarray(_a(_si, _sv, jnp.array([*s, _qtime(t, _h, False)]))) * action_std + action_mean
                 else:
-                    predict = lambda s, tn, _a=am, _si=si, _sv=sv: np.asarray(_a(_si, _sv, jnp.array([*s, tn])))
+                    predict = lambda s, t, _a=am, _si=si, _sv=sv, _h=horizon: np.asarray(_a(_si, _sv, jnp.array([*s, _qtime(t, _h, True)])))
             ratios = [rollout_cost(predict, starts[n], step_fn, stage, terminal, horizon) / (expert_costs[n] + 1e-9)
                       for n in range(len(eb))]
             out[method].append(float(np.mean(ratios)))
