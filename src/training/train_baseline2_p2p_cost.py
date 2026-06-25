@@ -26,8 +26,17 @@ def run_training(cfg, data_dir, output_dir, seed=42, device="cpu"):
     # B2 (concat-MLP) trains with a VARIABLE real-context count up to the operator's K
     # (so it learns padding and can be evaluated at a smaller context, like the operator's
     # size-agnostic set encoder). Slot bank = op_K; eval context = the operator's eval K.
-    b2_train_K = sorted({32, 64, op_K})
-    eval_n_ctx = int(train_cfg.get("baseline2_eval_K", 64))  # match operator eval context
+    #
+    # baseline2_fixed_K: NO-PADDING mode — train & eval at one fixed context size with the
+    # slot bank == K (every slot filled, no -1 padding), for the fixed-K fair comparison.
+    fixed_K = train_cfg.get("baseline2_fixed_K")
+    if fixed_K:
+        fixed_K = int(fixed_K)
+        b2_train_K = [fixed_K]; eval_n_ctx = fixed_K; b2_slots = fixed_K
+    else:
+        b2_train_K = sorted({32, 64, op_K})
+        eval_n_ctx = int(train_cfg.get("baseline2_eval_K", 64))  # match operator eval context
+        b2_slots = op_K
     N = int(train_cfg.get("N", 32))
     train_perc = train_cfg.get("train_perc", 0.8)
     elem_dim = STATE_DIM + CONTROL_DIM + 1  # (state, control, cost) = 7
@@ -53,7 +62,7 @@ def run_training(cfg, data_dir, output_dir, seed=42, device="cpu"):
 
     target_params = count_params(build_setonet(cfg, STATE_DIM + CONTROL_DIM, 1,
                                                STATE_DIM + 1, CONTROL_DIM, jr.PRNGKey(0)))
-    return fit_b2(cfg, sample_task, STATE_DIM, CONTROL_DIM, elem_dim, op_K, eval_n_ctx,
+    return fit_b2(cfg, sample_task, STATE_DIM, CONTROL_DIM, elem_dim, b2_slots, eval_n_ctx,
                   output_dir, seed, "P2P-Cost", target_params,
                   extra_meta={"max_action": max_action,
                               "state_mean": np.asarray(ns["state_mean"]),

@@ -39,6 +39,14 @@ def run_training(cfg, data_dir, output_dir, seed=42, device="cpu"):
     k_options = [int(k) for k in K_cfg] if isinstance(K_cfg, (list, tuple)) else [int(K_cfg)]
     n_traj = int(train_cfg.get("N", 8))
 
+    # baseline2_fixed_K: NO-PADDING mode — train & eval at one fixed K with slot bank == K.
+    fixed_K = train_cfg.get("baseline2_fixed_K")
+    if fixed_K:
+        fixed_K = int(fixed_K)
+        k_options = [fixed_K]; b2_slots = fixed_K; eval_n_ctx = fixed_K
+    else:
+        b2_slots = SLOTS; eval_n_ctx = EVAL_N_CTX
+
     def sample_task():
         n_ctx = int(np.random.choice(k_options))
         out = dl.get_task("train", K=n_ctx, N=n_traj)
@@ -50,5 +58,5 @@ def run_training(cfg, data_dir, output_dir, seed=42, device="cpu"):
 
     target_params = count_params(build_setonet(cfg, state_dim + action_dim, state_dim,
                                                state_dim + 1, action_dim, jr.PRNGKey(0)))
-    return fit_b2(cfg, sample_task, state_dim, action_dim, elem_dim, SLOTS, EVAL_N_CTX,
+    return fit_b2(cfg, sample_task, state_dim, action_dim, elem_dim, b2_slots, eval_n_ctx,
                   output_dir, seed, "P2P-Dynamics", target_params)

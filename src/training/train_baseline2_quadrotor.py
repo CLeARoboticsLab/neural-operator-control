@@ -39,6 +39,12 @@ def run_training(cfg, data_dir, output_dir, seed=42, device="cpu"):
     n_ctx = int(max(K_cfg)) if isinstance(K_cfg, (list, tuple)) else int(K_cfg)
     n_traj = int(train_cfg.get("N", 5))
 
+    # baseline2_fixed_K: NO-PADDING mode — train & eval at one fixed K with slot bank == K.
+    fixed_K = train_cfg.get("baseline2_fixed_K")
+    b2_slots = int(fixed_K) if fixed_K else SLOTS
+    if fixed_K:
+        n_ctx = int(fixed_K)
+
     def sample_task():
         rs, ra, rns, expert_traj, expert_actions = dl.sample_task("train", K=n_ctx, N=n_traj)
         rs, ra, rns = np.asarray(rs), np.asarray(ra), np.asarray(rns)
@@ -50,5 +56,5 @@ def run_training(cfg, data_dir, output_dir, seed=42, device="cpu"):
     target_params = count_params(build_setonet(cfg, state_dim + action_dim, state_dim,
                                                state_dim + 1, action_dim, jr.PRNGKey(0)))
 
-    return fit_b2(cfg, sample_task, state_dim, action_dim, elem_dim, SLOTS, n_ctx,
+    return fit_b2(cfg, sample_task, state_dim, action_dim, elem_dim, b2_slots, n_ctx,
                   output_dir, seed, "Quadrotor", target_params)
