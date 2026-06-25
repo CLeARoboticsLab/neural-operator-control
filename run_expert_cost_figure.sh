@@ -16,7 +16,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 RUN="uv run"                       # change to "python" if not using uv
-ENVS="${1:-p2p_cost}"
+ENVS="${1:-p2p_cost,p2p_dynamics,quadrotor}"   # all three Figure-6 envs
 
 # Figure 6 compares against MAML — train it where missing (same as `make figure6`).
 for env in $(echo "$ENVS" | tr ',' ' '); do
