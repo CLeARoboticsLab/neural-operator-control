@@ -8,11 +8,13 @@ license = { text = "MIT" }
 
 dependencies = [
     # Core ML framework
-    "jax==0.4.30",
-    "jaxlib==0.4.30",
-    "equinox==0.11.4",
-    "optax==0.2.2",
-    "jaxtyping==0.2.28",
+    # Pinned to 0.6.2: jaxlib < 0.5 cannot target Blackwell GPUs (sm_120, e.g. RTX 50xx) —
+    # its XLA caps codegen at sm_90a, which ptxas refuses to forward-compile to sm_120.
+    "jax==0.6.2",
+    "jaxlib==0.6.2",
+    "equinox==0.13.8",
+    "optax==0.2.8",
+    "jaxtyping==0.3.7",
 
     # Optimal control solvers
     "casadi==3.6.5",                  # IPOPT (obstacle avoidance)
@@ -32,7 +34,7 @@ dependencies = [
 [project.optional-dependencies]
 # GPU support — install with: pip install ".[cuda]"
 cuda = [
-    "jax[cuda12]==0.4.30",
+    "jax[cuda12]==0.6.2",
 ]
 
 # iMuJoCo environments — install with: pip install ".[imujoco]"
@@ -59,6 +61,13 @@ where = ["."]
 include = ["src*"]
 
 # ---------- Tool configuration ----------
+
+[tool.uv]
+# jax 0.6.2 pulls ml-dtypes>=0.5.0, which *declares* numpy>=2.1.0. That floor is
+# overly conservative — the stack runs correctly on numpy 1.26.4 at runtime, and
+# numpy 1.x is required for the numpy-1.x-ABI deps here (casadi 3.6.5). Override
+# the transitive floor so the lock matches the validated environment.
+override-dependencies = ["numpy==1.26.4"]
 
 [tool.ruff]
 line-length = 100

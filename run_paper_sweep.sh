@@ -15,7 +15,7 @@
 # ==============================================================================
 set -euo pipefail
 cd "$(dirname "$0")"
-RUN="uv run"   # change to "python" if not using uv
+RUN=""         # run in the activated venv directly; avoids uv re-sync clobbering the cuda plugin
 
 ENVS="p2p_cost p2p_dynamics quadrotor"
 

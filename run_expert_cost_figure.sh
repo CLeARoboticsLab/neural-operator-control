@@ -22,7 +22,7 @@
 # ==============================================================================
 set -euo pipefail
 cd "$(dirname "$0")"
-RUN="uv run"                       # change to "python" if not using uv
+RUN=""                             # run in the activated venv directly; avoids uv re-sync clobbering the cuda plugin
 ENVS="${1:-p2p_cost,p2p_dynamics,quadrotor}"   # all three Figure-6 envs
 
 # Both figures compare against MAML — train it where missing (same as `make figure6`).
