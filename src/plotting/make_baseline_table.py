@@ -14,10 +14,9 @@ import argparse
 import json
 from pathlib import Path
 
-ENVS = ["p2p_cost", "p2p_cost_small", "p2p_dynamics", "quadrotor", "obstacle"]
+ENVS = ["p2p_cost", "p2p_dynamics", "quadrotor"]
 ENV_HEADERS = {
-    "p2p_cost": "P2P-Cost", "p2p_cost_small": "P2P-Small", "p2p_dynamics": "P2P-Dyn.",
-    "quadrotor": "Quadrotor", "obstacle": "Obstacle",
+    "p2p_cost": "P2P-Cost", "p2p_dynamics": "P2P-Dyn.", "quadrotor": "Quadrotor",
 }
 # (json key, display label)
 ROWS = [
@@ -26,7 +25,7 @@ ROWS = [
     ("baseline2", "MLP, context (B2)"),
 ]
 # Entries flagged as non-converged: (env, method) -> note marker
-DIVERGED = {("p2p_cost_small", "baseline2")}
+DIVERGED = set()
 
 
 def load(results_dir):
@@ -64,8 +63,7 @@ def generate(results_dir, output_path):
         "pretrained SetONet operator versus two MLP baselines: \\textbf{B1} is handed the "
         "ground-truth task parameters; \\textbf{B2} must infer the task from the same context "
         "the operator's branch receives, but flattened into a vector. Lower is better; bold "
-        "marks the best per column. $^{\\dagger}$ did not converge within the environment's "
-        "training budget.}",
+        "marks the best per column.}",
         "\\label{tab:baselines}",
         f"\\begin{{tabular}}{{l{'c' * len(envs)}}}",
         "\\toprule",
