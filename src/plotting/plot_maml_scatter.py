@@ -28,9 +28,52 @@ import matplotlib
 import matplotlib.pyplot as plt
 from pathlib import Path
 
-from src.setonet import SetONet
+from src.setonet import SetONet, NormalizedSetONet
+from src.normalization import GridEnvironmentNormalizer
 from src.training.maml import MAMLMLP
 from src.envs.create_p2p_cost import generate_dataset
+
+
+def _inner(m):
+    """The underlying SetONet (handles the NormalizedSetONet wrapper)."""
+    return m.model if isinstance(m, NormalizedSetONet) else m
+
+
+def setonet_freeze_filter(ft, freeze_mode):
+    """eqx filter selecting trainable leaves for a (possibly Normalized) SetONet.
+
+    freeze_mode: 'trunk' (branch only), 'last_branch', 'last_both'.
+    """
+    norm = isinstance(ft, NormalizedSetONet)
+    trunk = (lambda m: m.model.trunk) if norm else (lambda m: m.trunk)
+    rho_last = (lambda m: m.model.rho.layers[-1]) if norm else (lambda m: m.rho.layers[-1])
+    trunk_last = (lambda m: m.model.trunk.layers[-1]) if norm else (lambda m: m.trunk.layers[-1])
+    if freeze_mode == "trunk":  # branch only (freeze trunk)
+        filt = jax.tree_util.tree_map(lambda x: eqx.is_array(x), ft)
+        filt = eqx.tree_at(trunk, filt, replace=jax.tree_util.tree_map(lambda _: False, trunk(ft)))
+    elif freeze_mode == "last_branch":
+        filt = jax.tree_util.tree_map(lambda _: False, ft)
+        filt = eqx.tree_at(rho_last, filt,
+                           replace=jax.tree_util.tree_map(lambda x: eqx.is_array(x), rho_last(ft)))
+    elif freeze_mode == "last_both":
+        filt = jax.tree_util.tree_map(lambda _: False, ft)
+        filt = eqx.tree_at(lambda m: (trunk_last(m), rho_last(m)), filt,
+                           replace=(jax.tree_util.tree_map(lambda x: eqx.is_array(x), trunk_last(ft)),
+                                    jax.tree_util.tree_map(lambda x: eqx.is_array(x), rho_last(ft))))
+    else:
+        raise ValueError(freeze_mode)
+    return filt
+
+
+def build_dynamics_normalized(base_setonet, cfg):
+    """Wrap a base SetONet in NormalizedSetONet using the env config's ranges
+    (leaf values are overwritten on deserialize, so max_acceleration is a placeholder)."""
+    dc = cfg.get("data", {})
+    xr = dc.get("workspace", {}).get("x_range", [-5.0, 5.0])
+    mv = dc.get("dynamics_ranges", {}).get("max_velocity_range", [10.0, 15.0])[1]
+    return NormalizedSetONet(base_setonet,
+                             GridEnvironmentNormalizer(position_range=(xr[0], xr[1]),
+                                                       max_velocity=mv, max_acceleration=1.0))
 
 DEFAULT_SEED = 42
 GRAD_STEPS = 25       # SetONet adaptation steps
@@ -460,24 +503,7 @@ def _dynamics_eval_ft_per_task(model, dataset, task_configs, traj_index_fn,
             continue
 
         ft = copy.deepcopy(model)
-
-        if freeze_mode == 'trunk':
-            filt = jax.tree_util.tree_map(lambda x: eqx.is_array(x), ft)
-            filt = eqx.tree_at(lambda m: m.trunk, filt,
-                               replace=jax.tree_util.tree_map(lambda _: False, ft.trunk))
-        elif freeze_mode == 'last_branch':
-            filt = jax.tree_util.tree_map(lambda _: False, ft)
-            filt = eqx.tree_at(lambda m: m.rho.layers[-1], filt,
-                               replace=jax.tree_util.tree_map(lambda x: eqx.is_array(x), ft.rho.layers[-1]))
-        elif freeze_mode == 'last_both':
-            filt = jax.tree_util.tree_map(lambda _: False, ft)
-            filt = eqx.tree_at(
-                lambda m: (m.trunk.layers[-1], m.rho.layers[-1]), filt,
-                replace=(
-                    jax.tree_util.tree_map(lambda x: eqx.is_array(x), ft.trunk.layers[-1]),
-                    jax.tree_util.tree_map(lambda x: eqx.is_array(x), ft.rho.layers[-1]),
-                ))
-
+        filt = setonet_freeze_filter(ft, freeze_mode)
         trainable, frozen = eqx.partition(ft, filt)
         opt = optax.adam(FT_LR)
         opt_state = opt.init(trainable)
@@ -602,7 +628,7 @@ def run_p2p_dynamics(config_dir, data_dir, checkpoint_dir, seed):
     keys = jr.split(key, 3)
     model_cfg = cfg["model"]
 
-    pretrained = SetONet(
+    base = SetONet(
         input_size_src=6, output_size_src=4,
         input_size_tgt=5, output_size_tgt=2,
         **{k: model_cfg[k] for k in ['p', 'phi_hidden_size', 'phi_output_size',
@@ -611,6 +637,8 @@ def run_p2p_dynamics(config_dir, data_dir, checkpoint_dir, seed):
            'attention_n_tokens', 'use_bias']},
         key=keys[0],
     )
+    # P2P-Dynamics is aligned to a NormalizedSetONet (min-max state/action scaling).
+    pretrained = build_dynamics_normalized(base, cfg) if model_cfg.get("use_normalization", True) else base
     pretrained = eqx.tree_deserialise_leaves(
         str(Path(checkpoint_dir) / "p2p_dynamics" / "pretrained" / "setonet.eqx"), pretrained)
 
