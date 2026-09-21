@@ -90,7 +90,7 @@ def build_dynamics_normalized(base_setonet, cfg):
 DEFAULT_SEED = 42
 GRAD_STEPS = 25       # SetONet adaptation steps
 MAML_GRAD_STEPS = 25  # MAML inner-loop steps
-NUM_DEMOS = 5
+NUM_DEMOS = 10        # expert trajectories for adaptation (matches Figure 6 caption)
 NUM_TASKS = 20
 K = 64
 N_EVAL = 32

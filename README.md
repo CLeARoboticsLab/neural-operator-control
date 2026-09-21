@@ -15,8 +15,8 @@ from the iMuJoCo benchmark.
 ## Installation
 
 ```bash
-git clone <this repository>
-cd <repository>
+git clone https://github.com/CLeARoboticsLab/neural-operator-control.git
+cd neural-operator-control
 python -m venv .venv && source .venv/bin/activate
 pip install -e .            # CPU
 pip install -e ".[cuda]"    # GPU (JAX with CUDA 12)
