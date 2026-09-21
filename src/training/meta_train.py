@@ -23,6 +23,7 @@ DISPATCH = {
     "p2p_dynamics": "src.training.meta_train_p2p_dynamics",
     "quadrotor": "src.training.meta_train_quadrotor",
     "obstacle": "src.training.meta_train_obstacle",
+    "halfcheetah": "src.training.meta_train_halfcheetah",
 }
 
 VALID_VARIANTS = {"meta_branch", "meta_full"}
@@ -68,6 +69,8 @@ def main():
         from src.training.meta_train_quadrotor import run_training
     elif generator_name == "obstacle":
         from src.training.meta_train_obstacle import run_training
+    elif generator_name == "halfcheetah":
+        from src.training.meta_train_halfcheetah import run_training
 
     run_training(cfg, data_dir=args.data, output_dir=args.output,
                  variant=args.variant, seed=args.seed, device=args.device)

@@ -52,11 +52,14 @@ These are set in each `src/training/train_<env>.py`. `d_x` / `d_u` are state / c
 | Obstacle | obstacle `(x, y)` (2) | radius `r` (1) | `state + time` = `4+1` | control (2) |
 | HalfCheetah-v3 (iMuJoCo) | `(state, action)` = `17+6` | next state (17) | `state + time` = `17+1` | action (6) |
 
-> iMuJoCo note: the iMuJoCo environments (Hopper, HalfCheetah, Walker2d) are **not bundled**
-> in this archive (see `README.md`). They use the same SetONet architecture/training
-> infrastructure; the benchmark data is at https://github.com/mpatacchiola/imujoco.
-> HalfCheetah-v3 is the only iMuJoCo environment reported in the paper (`d_x = 17`, `d_u = 6`,
-> 53 task configs, SAC expert).
+> iMuJoCo note: HalfCheetah-v3 (`d_x = 17`, `d_u = 6`, 53 configurations, 100 SAC expert
+> episodes each) is the only iMuJoCo environment reported in the paper. Its data is not
+> generated but downloaded (`make data-halfcheetah`, Patacchiola et al. 2023); the loader is
+> `src/envs/imujoco_dataloader.py` and the settings are in `configs/halfcheetah.yaml`:
+> p=128, 4 hidden layers, attention pooling (4 heads, 4 tokens); pretraining 10k iterations,
+> M=16 tasks, K in {1,3,5} context episodes of H=100 transitions, lr 1e-3 with cosine decay,
+> best-of-5; meta-training and MAML 10k iterations, inner lr 0.01 (SGD), outer lr 5e-4 (Adam),
+> 16 tasks per meta-batch; the MAML MLP is 256 wide and 4 deep.
 
 ---
 

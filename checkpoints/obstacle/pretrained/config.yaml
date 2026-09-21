@@ -1,0 +1,58 @@
+data:
+  N: 50
+  T: 1.0
+  num_obs: 12
+  num_tasks: 500
+  num_traj: 30
+  num_workers: 4
+  qf: 1000.0
+  qp: 1000.0
+generator: obstacle
+maml:
+  K_query: 8
+  K_support: 8
+  eval_every: 100
+  inner_lr: 0.01
+  num_eval_batches: 10
+  num_iterations: 2000
+  num_tasks: 16
+  outer_lr: 0.001
+  split_seed: 42
+maml_model:
+  hidden_size: 128
+  num_layers: 22
+model:
+  aggregation_type: attention
+  attention_n_heads: 4
+  attention_n_tokens: 4
+  n_phi_layers: 4
+  n_rho_layers: 4
+  n_trunk_layers: 4
+  p: 128
+  phi_hidden_size: 128
+  phi_output_size: 128
+  rho_hidden_size: 128
+  trunk_hidden_size: 128
+  use_bias: true
+setonet_meta:
+  K: 10
+  eval_every: 100
+  inner_lr: 0.01
+  num_eval_batches: 10
+  num_iterations: 2000
+  num_tasks: 16
+  outer_lr: 0.001
+  split_seed: 42
+training:
+  K:
+  - 32
+  - 64
+  - 128
+  M: 16
+  eval_every: 100
+  learning_rate: 0.001
+  normalize: true
+  num_iterations: 20000
+  num_runs: 1
+  split_seed: 42
+  train_perc: 0.8

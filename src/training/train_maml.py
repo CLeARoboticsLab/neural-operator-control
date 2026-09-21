@@ -22,6 +22,7 @@ DISPATCH = {
     "p2p_dynamics": "src.training.train_maml_p2p_dynamics",
     "quadrotor": "src.training.train_maml_quadrotor",
     "obstacle": "src.training.train_maml_obstacle",
+    "halfcheetah": "src.training.train_maml_halfcheetah",
 }
 
 
@@ -70,6 +71,8 @@ def main():
         from src.training.train_maml_quadrotor import run_training
     elif generator_name == "obstacle":
         from src.training.train_maml_obstacle import run_training
+    elif generator_name == "halfcheetah":
+        from src.training.train_maml_halfcheetah import run_training
 
     run_training(cfg, data_dir=args.data, output_dir=args.output,
                  seed=args.seed, device=args.device)

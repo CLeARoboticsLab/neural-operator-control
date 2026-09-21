@@ -32,7 +32,7 @@ TABLE_DIR    := $(OUTPUT_DIR)/tables
 
 # Environments
 OCP_ENVS     := p2p_cost p2p_cost_small p2p_dynamics quadrotor obstacle
-IMUJOCO_ENVS := hopper halfcheetah walker2d
+IMUJOCO_ENVS := halfcheetah
 ALL_ENVS     := $(OCP_ENVS) $(IMUJOCO_ENVS)
 
 # Adaptation methods
@@ -67,20 +67,19 @@ data-%:
 		--output $(DATA_DIR)/$* \
 		--seed $(SEED)
 
-# iMuJoCo: train SAC experts, then collect demonstrations
-# (Not included — see README for iMuJoCo data source)
+# iMuJoCo (Patacchiola et al., 2023): offline SAC expert rollouts, one .npz per
+# dynamics configuration. Downloaded from Zenodo (dataset.zip, ~2 GB), then the
+# HalfCheetah-v3 files are extracted into data/halfcheetah/.
+IMUJOCO_DATASET_URL := https://zenodo.org/record/7971395/files/dataset.zip
+IMUJOCO_ZIP         := $(DATA_DIR)/imujoco_dataset.zip
+
 data-imujoco: $(addprefix data-,$(IMUJOCO_ENVS))
 
-data-hopper data-halfcheetah data-walker2d: data-%:
-	$(PYTHON) src/envs/imujoco/train_sac.py \
-		--config $(CONFIG_DIR)/$*.yaml \
-		--output $(DATA_DIR)/$*/sac_experts \
-		--seed $(SEED)
-	$(PYTHON) src/envs/imujoco/collect_demos.py \
-		--config $(CONFIG_DIR)/$*.yaml \
-		--experts $(DATA_DIR)/$*/sac_experts \
-		--output $(DATA_DIR)/$* \
-		--seed $(SEED)
+data-halfcheetah:
+	mkdir -p $(DATA_DIR)/halfcheetah
+	@[ -f $(IMUJOCO_ZIP) ] || wget -O $(IMUJOCO_ZIP) $(IMUJOCO_DATASET_URL)
+	unzip -o -j $(IMUJOCO_ZIP) '*halfcheetah*.npz' -d $(DATA_DIR)/halfcheetah
+	@echo "HalfCheetah-v3 configurations: $$(ls $(DATA_DIR)/halfcheetah/*.npz | wc -l)"
 
 # ---------- Training ----------
 
@@ -199,7 +198,7 @@ table-fitting:
 
 # ---------- Figures ----------
 
-.PHONY: figures figure4 figure5 figure6 figure7 figure8 figure9 figure10 figure13
+.PHONY: figures figure4 figure5 figure6 figure7 figure8 figure9 figure10
 
 figures: figure4 figure5 figure6 figure7 figure8
 
@@ -259,7 +258,19 @@ figure8:
 		--results $(OUTPUT_DIR)/results/quadrotor_ood \
 		--output $(FIGURE_DIR)/figure8.pdf
 
-# Figure 9: HalfCheetah control predictions (requires iMuJoCo data)
+# ---------- HalfCheetah-v3 (iMuJoCo) ----------
+# Requires `make data-halfcheetah` and the four checkpoints under checkpoints/halfcheetah/
+# (pretrained, maml, meta_branch, meta_full):  make train-halfcheetah
+
+.PHONY: train-halfcheetah figure10-paper
+
+train-halfcheetah:
+	$(MAKE) train      ENV=halfcheetah
+	$(MAKE) train-maml ENV=halfcheetah
+	$(MAKE) train-meta ENV=halfcheetah VARIANT=meta_branch
+	$(MAKE) train-meta ENV=halfcheetah VARIANT=meta_full
+
+# Figure 9: HalfCheetah control predictions (zero-shot / FT / Meta-Full vs expert)
 figure9:
 	$(PYTHON) src/plotting/plot_cheetah_ctrl.py \
 		--config $(CONFIG_DIR)/halfcheetah.yaml \
@@ -267,28 +278,22 @@ figure9:
 		--checkpoints $(CHECKPOINT_DIR)/halfcheetah \
 		--output $(FIGURE_DIR)/figure9.pdf
 
-# Figure 10: HalfCheetah adaptation grid (requires iMuJoCo data)
+# Figure 10: HalfCheetah adaptation grid (5 methods x demos x gradient steps x 5 seeds).
+# The grid checkpoints its progress and can be resumed; expect several hours.
 figure10:
-	@echo "=== Running HalfCheetah adaptation sweep ==="
-	@for method in setonet_ft maml setonet_meta setonet_meta_full; do \
-		for demos in 1 5 10 25; do \
-			for steps in 1 5 10 25 50 100 200; do \
-				for seed in 1 2 3 4 5; do \
-					$(PYTHON) src/evaluation/evaluate.py \
-						--config $(CONFIG_DIR)/halfcheetah.yaml \
-						--data $(DATA_DIR)/halfcheetah \
-						--checkpoint $(CHECKPOINT_DIR)/halfcheetah \
-						--method $$method \
-						--steps $$steps \
-						--num-demos $$demos \
-						--seed $$seed \
-						--output $(OUTPUT_DIR)/results/cheetah_grid/$${method}_$${demos}_$${steps}_$${seed}.json; \
-				done; \
-			done; \
-		done; \
-	done
+	$(PYTHON) src/evaluation/evaluate_halfcheetah.py \
+		--config $(CONFIG_DIR)/halfcheetah.yaml \
+		--data $(DATA_DIR)/halfcheetah \
+		--checkpoints $(CHECKPOINT_DIR)/halfcheetah \
+		--output $(OUTPUT_DIR)/results/halfcheetah_grid
 	$(PYTHON) src/plotting/plot_cheetah_grid.py \
-		--results $(OUTPUT_DIR)/results/cheetah_grid \
+		--results $(OUTPUT_DIR)/results/halfcheetah_grid/grid_results.npz \
+		--output $(FIGURE_DIR)/figure10.pdf
+
+# Figure 10 from the grid results shipped with the paper (no training or data needed)
+figure10-paper:
+	$(PYTHON) src/plotting/plot_cheetah_grid.py \
+		--results paper_results/halfcheetah_grid.json \
 		--output $(FIGURE_DIR)/figure10.pdf
 
 # ---------- Full Reproduction ----------
@@ -317,14 +322,15 @@ help:
 	@echo "Data Generation:"
 	@echo "  data                        Generate all datasets"
 	@echo "  data-ocp                    Generate OCP environment datasets"
-	@echo "  data-imujoco                Train SAC experts + collect demos"
+	@echo "  data-halfcheetah            Download iMuJoCo HalfCheetah-v3 expert data"
 	@echo ""
 	@echo "Training:"
 	@echo "  train ENV=<env>             Train SetONet on one environment"
 	@echo "  train-all                   Train on all environments"
-	@echo "  train-meta ENV=<env> VARIANT=<meta|meta_full>"
+	@echo "  train-meta ENV=<env> VARIANT=<meta_branch|meta_full>"
 	@echo "                              Meta-train SetONet"
 	@echo "  train-maml ENV=<env>        Train MAML baseline"
+	@echo "  train-halfcheetah           All four HalfCheetah-v3 models"
 	@echo ""
 	@echo "Evaluation:"
 	@echo "  evaluate ENV=<e> METHOD=<m> STEPS=<s>"
@@ -332,12 +338,13 @@ help:
 	@echo ""
 	@echo "Results:"
 	@echo "  table2                      Reproduce Table 2"
-	@echo "  figure4 ... figure8         Reproduce individual figures"
+	@echo "  figure4 ... figure10        Reproduce individual figures"
+	@echo "  figure10-paper              Figure 10 from the shipped paper results"
 	@echo "  figures                     Reproduce all figures"
 	@echo "  all                         Reproduce all (from checkpoints)"
 	@echo "  all-from-scratch            Full reproduction (trains first)"
 	@echo ""
-	@echo "Environments: $(OCP_ENVS)"
+	@echo "Environments: $(OCP_ENVS) $(IMUJOCO_ENVS)"
 	@echo "Methods:      pretrained $(ADAPT_METHODS) $(META_METHODS)"
 	@echo ""
 

@@ -1,6 +1,10 @@
-# Data and checkpoints (generated, not tracked)
-data/
-checkpoints/
+# Bundled: data/ (OCP datasets) and checkpoints/ (pretrained + MLP baselines).
+# Not bundled: the iMuJoCo download (2 GB) and anything trained on it; regenerated outputs.
+data/imujoco_dataset.zip
+# Obstacle dataset (70 MB): regenerate with `make data-obstacle`
+data/obstacle/
+data/halfcheetah/
+checkpoints/halfcheetah/
 outputs/
 
 # Python

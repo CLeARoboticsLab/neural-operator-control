@@ -581,6 +581,9 @@ def main():
     if args.grid:
         if generator == "p2p_cost":
             run_grid_p2p_cost(cfg, args.data, args.checkpoint, args.output, args.seed)
+        elif generator == "halfcheetah":
+            from src.evaluation.evaluate_halfcheetah import run_grid
+            run_grid(cfg, args.data, args.checkpoint, args.output, args.seed)
         else:
             print(f"Grid evaluation for '{generator}' not yet implemented")
             sys.exit(1)
