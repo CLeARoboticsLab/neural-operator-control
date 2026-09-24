@@ -1,0 +1,33 @@
+cff-version: 1.2.0
+message: "If you use this code, please cite the paper below."
+title: "Neural Operators for Multi-Task Control and Adaptation"
+authors:
+  - family-names: SeWell
+    given-names: David
+  - family-names: Li
+    given-names: Xingjian
+  - family-names: Tretiakov
+    given-names: Stepan
+  - family-names: Kumar
+    given-names: Krishna
+  - family-names: Fridovich-Keil
+    given-names: David
+repository-code: "https://github.com/CLeARoboticsLab/neural-operator-control"
+license: MIT
+preferred-citation:
+  type: article
+  title: "Neural Operators for Multi-Task Control and Adaptation"
+  authors:
+    - family-names: SeWell
+      given-names: David
+    - family-names: Li
+      given-names: Xingjian
+    - family-names: Tretiakov
+      given-names: Stepan
+    - family-names: Kumar
+      given-names: Krishna
+    - family-names: Fridovich-Keil
+      given-names: David
+  journal: "Transactions on Machine Learning Research"
+  year: 2026
+  url: "https://openreview.net/forum?id=jciOb0z5Wm"
