@@ -1,9 +1,18 @@
 """
 Figure 6: Per-task MAML vs SetONet scatter plots across 3 OCP environments.
 
-Each point = one held-out task.
+Each point = one held-out task (NUM_TASKS = 20 per environment).
 x-axis = Model relative L2, y-axis = MAML relative L2.
 Points above y=x => MAML performs worse.
+
+Adaptation data (matches the Figure 6 caption): every method adapts each task
+with the SAME fixed set of NUM_DEMOS = 10 expert trajectories for GRAD_STEPS = 25
+gradient steps, with K = 64 context points. The pool those 10 are drawn from
+differs by environment:
+  P2P-Cost      50 generated trajectories/task, 25% (12) reserved for
+                adaptation (demos come from these), 38 held out for evaluation.
+  P2P-Dynamics  100 trajectories/task; evaluation samples from the full pool.
+  Quadrotor     20 trajectories/task; evaluation samples from the full pool.
 
 Usage (matches Makefile):
     python src/plotting/plot_maml_scatter.py \
@@ -132,8 +141,9 @@ def predict_maml(model, tgt_states):
 class TransferTaskDataLoader:
     """Splits each task's data into train (adaptation) and holdout (eval)."""
 
-    def __init__(self, dataset, train_holdout_split=0.25, normalize=True):
+    def __init__(self, dataset, train_holdout_split=0.25, normalize=True, num_demos=None):
         self.dataset = dataset
+        self.num_demos = num_demos
         self.normalize = normalize
         self.num_goals = int(dataset['num_goals'])
         self.state_dim = dataset['states'].shape[-1]
@@ -147,8 +157,13 @@ class TransferTaskDataLoader:
             traj_indices = np.where(goal_mask)[0]
             np.random.shuffle(traj_indices)
             n_train = int(len(traj_indices) * train_holdout_split)
+            train_indices = traj_indices[:n_train]
+            # Fixed set of expert demonstrations for adaptation (NUM_DEMOS in the
+            # Figure 6 caption). Every method adapts on exactly these trajectories.
+            n_demos = len(train_indices) if num_demos is None else min(num_demos, len(train_indices))
             self.task_data[goal_idx] = {
-                'train_indices': traj_indices[:n_train],
+                'train_indices': train_indices,
+                'demo_indices': train_indices[:n_demos],
                 'holdout_indices': traj_indices[n_train:],
             }
 
@@ -222,6 +237,10 @@ class TransferTaskDataLoader:
     def sample_train(self, tid, K, N):
         return self._sample(self.task_data[tid]['train_indices'], K, N)
 
+    def sample_demos(self, tid, K, N):
+        """Targets drawn only from the task's fixed demonstration trajectories."""
+        return self._sample(self.task_data[tid]['demo_indices'], K, N)
+
     def sample_holdout(self, tid, K, N):
         return self._sample(self.task_data[tid]['holdout_indices'], K, N)
 
@@ -282,7 +301,7 @@ def _eval_partial_ft_per_task(model, dl, task_ids, num_demos, grad_steps,
 
         for _ in range(grad_steps):
             si, sv = _get_context(dl, tid, dataset)
-            b = dl.sample_train(tid, K, N=num_demos)
+            b = dl.sample_demos(tid, K, N=num_demos)
             ts, tc = jnp.array(b[4]), jnp.array(b[5])
             def loss_fn(tr):
                 mm = eqx.combine(tr, frozen)
@@ -318,7 +337,7 @@ def eval_setonet_ft_per_task(model, dl, task_ids, num_demos, grad_steps, max_act
 
         for _ in range(grad_steps):
             si, sv = _get_context(dl, tid, dataset)
-            b = dl.sample_train(tid, K, N=num_demos)
+            b = dl.sample_demos(tid, K, N=num_demos)
             ts, tc = jnp.array(b[4]), jnp.array(b[5])
             def loss_fn(tr):
                 mm = eqx.combine(tr, frozen)
@@ -344,7 +363,7 @@ def eval_maml_per_task(maml_model, dl, task_ids, num_demos, grad_steps,
                        inner_lr, max_action):
     task_errors = []
     for tid in task_ids:
-        b = dl.sample_train(tid, K, N=num_demos)
+        b = dl.sample_demos(tid, K, N=num_demos)
         sup_s = jnp.array(b[4].reshape(-1, b[4].shape[-1]))
         sup_c = jnp.array(b[5].reshape(-1, b[5].shape[-1]))
 
@@ -428,7 +447,8 @@ def run_p2p_cost(config_dir, data_dir, checkpoint_dir, seed):
     transfer_ds['norm_stats'] = norm_stats
 
     np.random.seed(seed)
-    dl = TransferTaskDataLoader(transfer_ds, train_holdout_split=0.25, normalize=True)
+    dl = TransferTaskDataLoader(transfer_ds, train_holdout_split=0.25, normalize=True,
+                                num_demos=NUM_DEMOS)
     dl.max_action = max_action
     task_ids = dl.get_task_ids()
 
@@ -530,6 +550,21 @@ def _dynamics_eval_ft_per_task(model, dataset, task_configs, traj_index_fn,
 
         transitions = _collect_transitions(dataset['states'], dataset['actions'], traj_indices)
 
+        # Fixed set of num_demos expert trajectories for this task (Figure 6 caption);
+        # the same demos are used at every gradient step, as in the MAML inner loop.
+        demo_idx = np.random.choice(traj_indices, size=min(num_demos, len(traj_indices)), replace=False)
+        demo_s = jnp.array(dataset['states'][demo_idx, :-1, :])
+        demo_a_raw = jnp.array(dataset['actions'][demo_idx])
+        # Normalize demo actions to match model output space
+        if action_mean is not None and action_std is not None:
+            demo_a_norm = (demo_a_raw - jnp.array(action_mean)) / jnp.array(action_std)
+        else:
+            demo_a_norm = demo_a_raw
+        H = demo_a_norm.shape[1]
+        time_norm = _times_arr(H, raw_time, jnp)
+        time_bc = jnp.broadcast_to(time_norm[None, :, None], (demo_s.shape[0], H, 1))
+        demo_st = jnp.concatenate([demo_s, time_bc], axis=-1)
+
         for _ in range(grad_steps):
             ctx_idx = np.random.choice(len(transitions), size=min(K, len(transitions)), replace=False)
             ctx_s = np.array([transitions[i][0] for i in ctx_idx])
@@ -537,19 +572,6 @@ def _dynamics_eval_ft_per_task(model, dataset, task_configs, traj_index_fn,
             ctx_ns = np.array([transitions[i][2] for i in ctx_idx])
             si = jnp.concatenate([jnp.array(ctx_s), jnp.array(ctx_a)], axis=-1)
             so = jnp.array(ctx_ns)
-
-            demo_idx = np.random.choice(traj_indices, size=min(num_demos, len(traj_indices)), replace=False)
-            demo_s = jnp.array(dataset['states'][demo_idx, :-1, :])
-            demo_a_raw = jnp.array(dataset['actions'][demo_idx])
-            # Normalize demo actions to match model output space
-            if action_mean is not None and action_std is not None:
-                demo_a_norm = (demo_a_raw - jnp.array(action_mean)) / jnp.array(action_std)
-            else:
-                demo_a_norm = demo_a_raw
-            H = demo_a_norm.shape[1]
-            time_norm = _times_arr(H, raw_time, jnp)
-            time_bc = jnp.broadcast_to(time_norm[None, :, None], (demo_s.shape[0], H, 1))
-            demo_st = jnp.concatenate([demo_s, time_bc], axis=-1)
 
             def loss_fn(tr):
                 mm = eqx.combine(tr, frozen)
